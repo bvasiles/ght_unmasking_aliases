@@ -24,15 +24,15 @@ DOMAIN              = 'EMAIL_DOMAIN'
 TWO                 = 'TWO_OR_MORE_RULES'
 
 THR_MIN = 1
-THR_MAX = 10
+THR_MAX = 20
 
 unmask = {}
 
-dataPath = os.path.abspath('../../data/2014-01')
+dataPath = os.path.abspath('../')
 
-w_log = UnicodeWriter(open(os.path.join(dataPath, 'idm', 'idm_log.csv'), 'wb'))
-writer = UnicodeWriter(open(os.path.join(dataPath, 'idm', 'idm_map.csv'), 'wb'))
-w_maybe = UnicodeWriter(open(os.path.join(dataPath, 'idm', 'idm_maybe.csv'), 'wb'))
+w_log = UnicodeWriter(open(os.path.join(dataPath, 'idm_log.csv'), 'wb'))
+writer = UnicodeWriter(open(os.path.join(dataPath, 'idm_map.csv'), 'wb'))
+w_maybe = UnicodeWriter(open(os.path.join(dataPath, 'idm_maybe.csv'), 'wb'))
 
 idx = 0
 step = 100000
@@ -40,9 +40,8 @@ curidx = step
 
 aliases = {}
 
-#    reader = UnicodeReader(open(os.path.join(dataPath, 'users_clean_emails_sample.csv'), 'rb'))
-reader = UnicodeReader(open(os.path.join(dataPath, 'clean', 'users_clean_emails.csv'), 'rb'))
-_header = reader.next()
+reader = UnicodeReader(open(os.path.join(dataPath, 'users_emails_sample.csv'), 'rb'))
+# _header = reader.next()
 
 # Helper structures
 d_email_uid = {}
@@ -69,21 +68,32 @@ d_uid_location = {}
 d_uid_type = {}
 #d_type_usr = {}
 
-for row in reader:
-    uid = row[0]
-    login = row[1].strip()
-    name = row[2]    
-    user_type = row[6].strip()
-    location = row[3]
-    email = row[4]
-    
-    unmask[uid] = uid
+uid = 0
 
-    m = fakeusr_rex.search(login)
-    if m is not None:
-        record_type = USR_FAKE
-    else:
-        record_type = USR_REAL
+raw = {}
+
+for row in reader:
+    line = row.decode('utf-8').strip()
+    uid = uid + 1
+    raw[uid] = line
+    login = None #row[1].strip()
+    user_type = None
+    location = None
+    try:
+        name = line.split('<')[0].strip()
+        email = line.split('<')[1].strip().split('>')[0].strip()
+    except:
+        print line
+        exit()
+    
+    unmask[raw[uid]] = raw[uid]
+
+    record_type = USR_REAL
+#     m = fakeusr_rex.search(login)
+#     if m is not None:
+#         record_type = USR_FAKE
+#     else:
+#         record_type = USR_REAL
     
     a = Alias(record_type, uid, login, name, email, location, user_type)
     aliases[uid] = a
@@ -142,7 +152,7 @@ for row in reader:
         
     idx += 1
     if idx >= curidx:
-        print curidx/step, '/ 30'
+        print curidx/step
         curidx += step
 
 print 'Done: helpers'
@@ -209,14 +219,12 @@ for prefix in set(d_login_uid.keys()).intersection(set(d_name_uid.keys())):
 
 print 'Done: login=name'
                 
-#    print d_name_uid.items()
 for name, set_uid in d_name_uid.iteritems():
     if len(set_uid) > THR_MIN and len(set_uid) < THR_MAX:
         if len(name.split(' ')) > 1:
             for a,b in combinations(sorted(set_uid, key=lambda uid:int(uid)), 2):
                 clues.setdefault((a, b), [])
                 clues[(a, b)].append(FULL_NAME)
-#                    print a,b,FULL_NAME
         else:
             for a,b in combinations(sorted(set_uid, key=lambda uid:int(uid)), 2):
                 clues.setdefault((a, b), [])
@@ -250,19 +258,37 @@ clusters = {}
 labels = {}
 
 def merge(a,b,rule):
+    # Contract: a < b 
+    assert a<b, "A must be less than B"
     if d_alias_map.has_key(a):
         if d_alias_map.has_key(b):
-            labels[d_alias_map[a]].append(rule)
+            if d_alias_map[a] == d_alias_map[b]:
+                labels[d_alias_map[a]].append(rule)
+            else:
+                lowest = min(d_alias_map[a], d_alias_map[b])
+                highest = max(d_alias_map[a], d_alias_map[b])
+                labels[lowest].extend(labels[highest])
+                labels[lowest].append(rule)
+                clusters[lowest].update(clusters[highest])
+                for x in clusters[highest]: d_alias_map[x] = lowest
+                del labels[highest]
+                del clusters[highest]
+                d_alias_map[a] = lowest
+                d_alias_map[b] = lowest
+            
         else:
+            # a is an alias; first time I see b
             d_alias_map[b] = d_alias_map[a]
             clusters[d_alias_map[a]].add(b)
             labels[d_alias_map[a]].append(rule)
     else:
         if d_alias_map.has_key(b):
+            #b_src = d_alias_map[b] # b_src < a by construction
             d_alias_map[a] = d_alias_map[b]
             clusters[d_alias_map[b]].add(a)
             labels[d_alias_map[b]].append(rule)
         else:
+            # First time I see this pair (guaranteed sorted)
             d_alias_map[a] = a
             d_alias_map[b] = a
             clusters[a] = set([a,b])
@@ -270,20 +296,22 @@ def merge(a,b,rule):
     
     
 for (a,b), list_clues in sorted(clues.items(), key=lambda e:(int(e[0][0]),int(e[0][1]))):
-#        aa = aliases[a]
-#        ab = aliases[b]
-#        print aa.uid, aa.login,unidecode(aa.name),aa.email, ' - ', ab.uid,ab.login,unidecode(ab.name),ab.email,list_clues
+    aa = aliases[a]
+    ab = aliases[b]
     
     if EMAIL in list_clues:
         merge(a,b,EMAIL)
-    elif len(list_clues) >= 2:
-        for clue in list_clues:
+    elif len(set(list_clues)) >= 2:
+        for clue in set(list_clues):
             merge(a,b,clue)
 #            merge(a,b,TWO)
     elif FULL_NAME in list_clues:
         merge(a,b,FULL_NAME)
     elif COMP_EMAIL_PREFIX in list_clues:
         merge(a,b,COMP_EMAIL_PREFIX)
+    elif SIMPLE_NAME in list_clues:
+        merge(a,b,SIMPLE_NAME)
+        
 
 print 'Done: clusters'
             
@@ -322,6 +350,16 @@ for uid, member_uids in clusters.iteritems():
     elif len(real)==0 and \
             (cl.get(COMP_EMAIL_PREFIX,0) >= (len(members)-1) or cl.get(FULL_NAME,0) >= (len(members)-1)):
         is_valid = True
+    # All with same full name
+    elif cl.get(FULL_NAME,0) >= (len(members)-1):
+        is_valid = True
+    # The only two rules that fired are full name and email, in some combination
+    elif len(cl.keys()) == 2 and cl.get(FULL_NAME,0) > 0 and cl.get(EMAIL,0) > 0:
+        is_valid = True
+    elif len(cl.keys()) == 3 and cl.get(FULL_NAME,0) > 0 and cl.get(EMAIL,0) > 0 and cl.get(SIMPLE_NAME,0) > 0:
+        is_valid = True
+    elif len(cl.keys()) == 2 and cl.get(EMAIL,0) > 0 and cl.get(SIMPLE_NAME,0) > 0:
+        is_valid = True
     else:
         # Split by email address if at least 2 share one
         if cl.get(EMAIL,0):
@@ -347,7 +385,7 @@ for uid, member_uids in clusters.iteritems():
                     if a.uid != rep.uid:
                         w_log.writerow([a.uid, a.login, a.name, a.email, a.location])
                         writer.writerow([a.uid, rep.uid])
-                        unmask[a.uid] = rep.uid
+                        unmask[raw[a.uid]] = raw[rep.uid]
         
         
         w_maybe.writerow([])
@@ -375,11 +413,11 @@ for uid, member_uids in clusters.iteritems():
             if a.uid != rep.uid:
                 w_log.writerow([a.uid, a.login, a.name, a.email, a.location])
                 writer.writerow([a.uid, rep.uid])
-                unmask[a.uid] = rep.uid
+                unmask[raw[a.uid]] = raw[rep.uid]
 
 
 import pickle
-pickle.dump(unmask,         open(os.path.join(dataPath, 'dict', 'aliasMap.dict'), 'wb'))
+pickle.dump(unmask, open(os.path.join(dataPath, 'aliasMap.dict'), 'wb'))
 
 
 

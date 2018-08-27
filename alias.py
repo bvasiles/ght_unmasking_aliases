@@ -21,7 +21,7 @@ class Alias:
         self.record_type = record_type 
         self.usr_type = usr_type
         self.uid = uid
-        self.login = login.strip()
+        self.login = login #.strip()
         self.name = name.strip()
         
         email = email.strip().lower()
@@ -56,9 +56,9 @@ class Alias:
         self.email_prefix = prefix
         self.email_domain = domain
         
-        location = location.strip()
-        if location == 'N' or not len(location):
-            location = None
+        #location = location.strip()
+        #if location == 'N' or not len(location):
+        #    location = None
         self.location = location
         
         self.gender = gender
